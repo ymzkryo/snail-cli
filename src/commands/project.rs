@@ -21,8 +21,8 @@ pub fn new(name: &str, config: &Config) -> Result<()> {
     let template_path = config.get_template_path("project")?;
 
     let replacements = vec![
-        ("{{name}}", name),
-        ("{{date}}", &date),
+        ("name", name),
+        ("date", &date),
     ];
 
     create_file_from_template(&template_path, &readme_path, &replacements)?;

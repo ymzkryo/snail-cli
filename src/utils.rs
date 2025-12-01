@@ -17,12 +17,20 @@ pub fn create_file_from_template(
         fs::read_to_string(template_path)
             .with_context(|| format!("Failed to read template: {:?}", template_path))?
     } else {
-        String::new()
+        anyhow::bail!("Template file not found: {:?}", template_path);
     };
 
     let mut content = template_content;
+
+    // Replace both lowercase and uppercase variants
     for (key, value) in replacements {
-        content = content.replace(key, value);
+        // Replace lowercase variant (e.g., {{title}})
+        let lowercase_key = format!("{{{{{}}}}}", key);
+        content = content.replace(&lowercase_key, value);
+
+        // Replace uppercase variant (e.g., {{TITLE}})
+        let uppercase_key = format!("{{{{{}}}}}", key.to_uppercase());
+        content = content.replace(&uppercase_key, value);
     }
 
     if let Some(parent) = output_path.parent() {

@@ -14,9 +14,10 @@ pub fn new(title: &str, project: Option<&str>, config: &Config) -> Result<()> {
 
     let project_str = project.unwrap_or("");
     let replacements = vec![
-        ("{{title}}", title),
-        ("{{date}}", &date),
-        ("{{project}}", project_str),
+        ("title", title),
+        ("date", &date),
+        ("kind", "todo"),
+        ("project", project_str),
     ];
 
     create_file_from_template(&template_path, &file_path, &replacements)?;

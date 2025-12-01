@@ -13,8 +13,9 @@ pub fn new(title: &str, config: &Config) -> Result<()> {
     let template_path = config.get_template_path("memo")?;
 
     let replacements = vec![
-        ("{{title}}", title),
-        ("{{date}}", &date),
+        ("title", title),
+        ("date", &date),
+        ("kind", "memo"),
     ];
 
     create_file_from_template(&template_path, &file_path, &replacements)?;

@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::env;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -53,19 +52,13 @@ impl Config {
     }
 
     pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .context("Failed to get config directory")?
-            .join("snail-cli");
-
-        Ok(config_dir.join("config.toml"))
+        let config_dir = shellexpand::tilde("~/.config/snail-cli");
+        Ok(PathBuf::from(config_dir.as_ref()).join("config.toml"))
     }
 
     pub fn template_dir() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .context("Failed to get config directory")?
-            .join("snail-cli");
-
-        Ok(config_dir.join("templates"))
+        let config_dir = shellexpand::tilde("~/.config/snail-cli");
+        Ok(PathBuf::from(config_dir.as_ref()).join("templates"))
     }
 
     pub fn root_dir(&self) -> Result<PathBuf> {
@@ -109,20 +102,7 @@ impl Config {
 
 impl Default for Config {
     fn default() -> Self {
-        // デフォルトはリポジトリ内の templates/ を使う
-        let default_template_dir = env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
-            .and_then(|dir| {
-                // target/debug or target/release から3つ上がプロジェクトルート
-                dir.parent()
-                    .and_then(|p| p.parent())
-                    .map(|p| p.join("templates"))
-            })
-            .unwrap_or_else(|| PathBuf::from("./templates"));
-
-        let template_dir_str = default_template_dir.to_string_lossy().to_string();
-
+        // Fallback to repository templates if config file doesn't exist
         Self {
             general: GeneralConfig {
                 root_dir: "~/memo".to_string(),
@@ -130,10 +110,10 @@ impl Default for Config {
                 date_format: "%Y-%m-%d".to_string(),
             },
             templates: TemplateConfig {
-                memo: format!("{}/memo.md", template_dir_str),
-                todo: format!("{}/todo.md", template_dir_str),
-                project: format!("{}/project.md", template_dir_str),
-                daily_report: format!("{}/daily_report.md", template_dir_str),
+                memo: "~/.config/snail-cli/templates/memo.md".to_string(),
+                todo: "~/.config/snail-cli/templates/todo.md".to_string(),
+                project: "~/.config/snail-cli/templates/project.md".to_string(),
+                daily_report: "~/.config/snail-cli/templates/daily_report.md".to_string(),
             },
             directories: DirectoryConfig {
                 inbox: "00000_INBOX".to_string(),
