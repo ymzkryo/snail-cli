@@ -1,0 +1,6 @@
+---
+created: {{date}}
+---
+
+# {{title}}
+
