@@ -14,8 +14,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Memo { action } => match action {
-            MemoAction::New { title } => {
-                commands::memo::new(&title, &config)?;
+            MemoAction::New { title, no_edit } => {
+                commands::memo::new(&title, no_edit, &config)?;
             }
             MemoAction::List => {
                 commands::memo::list(&config)?;
@@ -25,8 +25,8 @@ fn main() -> Result<()> {
             }
         },
         Commands::Todo { action } => match action {
-            TodoAction::New { title, project } => {
-                commands::todo::new(&title, project.as_deref(), &config)?;
+            TodoAction::New { title, project, no_edit } => {
+                commands::todo::new(&title, project.as_deref(), no_edit, &config)?;
             }
             TodoAction::List { filter } => {
                 commands::todo::list(&filter, &config)?;
@@ -36,8 +36,8 @@ fn main() -> Result<()> {
             }
         },
         Commands::Project { action } => match action {
-            ProjectAction::New { name } => {
-                commands::project::new(&name, &config)?;
+            ProjectAction::New { name, no_edit } => {
+                commands::project::new(&name, no_edit, &config)?;
             }
             ProjectAction::List => {
                 commands::project::list(&config)?;

@@ -3,7 +3,7 @@ use std::fs;
 use crate::config::Config;
 use crate::utils::{create_file_from_template, get_current_date, open_editor};
 
-pub fn new(name: &str, config: &Config) -> Result<()> {
+pub fn new(name: &str, no_edit: bool, config: &Config) -> Result<()> {
     let project_dir = config.project_dir()?;
 
     // Find the maximum project number
@@ -30,7 +30,9 @@ pub fn new(name: &str, config: &Config) -> Result<()> {
     println!("Created project: {}", new_project_dir.display());
     println!("README: {}", readme_path.display());
 
-    open_editor(&readme_path, &config.general.editor)?;
+    if !no_edit {
+        open_editor(&readme_path, &config.general.editor)?;
+    }
 
     Ok(())
 }

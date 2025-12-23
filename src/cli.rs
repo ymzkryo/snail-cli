@@ -38,6 +38,9 @@ pub enum MemoAction {
     New {
         /// Title of the memo
         title: String,
+        /// Do not open editor after creating
+        #[arg(short = 'n', long)]
+        no_edit: bool,
     },
     /// List all memos
     List,
@@ -57,6 +60,9 @@ pub enum TodoAction {
         /// Project name
         #[arg(short, long)]
         project: Option<String>,
+        /// Do not open editor after creating
+        #[arg(short = 'n', long)]
+        no_edit: bool,
     },
     /// List all todo tasks
     List {
@@ -77,6 +83,9 @@ pub enum ProjectAction {
     New {
         /// Project name
         name: String,
+        /// Do not open editor after creating
+        #[arg(short = 'n', long)]
+        no_edit: bool,
     },
     /// List all projects
     List,

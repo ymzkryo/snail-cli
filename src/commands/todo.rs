@@ -2,7 +2,7 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::utils::{create_file_from_template, get_current_date, open_editor, sanitize_filename};
 
-pub fn new(title: &str, project: Option<&str>, config: &Config) -> Result<()> {
+pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
     let sanitized_title = sanitize_filename(title);
     let filename = format!("{}-{}.md", date, sanitized_title);
@@ -24,7 +24,9 @@ pub fn new(title: &str, project: Option<&str>, config: &Config) -> Result<()> {
 
     println!("Created todo: {}", file_path.display());
 
-    open_editor(&file_path, &config.general.editor)?;
+    if !no_edit {
+        open_editor(&file_path, &config.general.editor)?;
+    }
 
     Ok(())
 }
