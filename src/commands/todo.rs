@@ -34,12 +34,231 @@ pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -
     Ok(())
 }
 
-pub fn list(filters: &[String], _config: &Config) -> Result<()> {
-    if filters.is_empty() {
-        println!("Todo list command - not yet implemented");
-    } else {
-        println!("Todo list with filters: {:?} - not yet implemented", filters);
+pub fn list(filters: &[String], config: &Config) -> Result<()> {
+    let mut todos: Vec<TodoItem> = Vec::new();
+    let root_dir = config.root_dir()?;
+    let today = get_current_date(&config.general.date_format);
+
+    // Parse filters
+    let mut status_filter: Option<String> = None;
+    let mut due_filter: Option<String> = None;
+
+    for filter in filters {
+        if let Some((key, value)) = filter.split_once(':') {
+            match key {
+                "status" => status_filter = Some(value.to_string()),
+                "due" => due_filter = Some(value.to_string()),
+                _ => {}
+            }
+        }
     }
+
+    // Search in INBOX, NEXTACTION, and project directories
+    let search_dirs = vec![
+        config.inbox_dir()?,
+        config.next_dir()?,
+    ];
+
+    for dir in search_dirs {
+        if dir.exists() {
+            collect_todos(&dir, &mut todos)?;
+        }
+    }
+
+    // Search in project directories (recursive)
+    let project_dir = config.project_dir()?;
+    if project_dir.exists() {
+        collect_todos_recursive(&project_dir, &mut todos)?;
+    }
+
+    // Apply filters
+    if let Some(ref status) = status_filter {
+        todos.retain(|t| t.status == *status);
+    }
+
+    if let Some(ref due) = due_filter {
+        match due.as_str() {
+            "today" => {
+                todos.retain(|t| t.due == today);
+            }
+            "overdue" => {
+                todos.retain(|t| !t.due.is_empty() && t.due < today);
+            }
+            _ => {
+                // Treat as exact date match
+                todos.retain(|t| t.due == *due);
+            }
+        }
+    }
+
+    if todos.is_empty() {
+        println!("No active todos found.");
+        return Ok(());
+    }
+
+    // Sort by created date (newest first)
+    todos.sort_by(|a, b| b.created.cmp(&a.created));
+
+    // Display todos
+    for (i, todo) in todos.iter().enumerate() {
+        let project_str = if todo.project.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", todo.project)
+        };
+        let due_str = if todo.due.is_empty() {
+            String::new()
+        } else {
+            format!(" (due: {})", todo.due)
+        };
+        // Show path relative to root_dir
+        let display_path = todo.path.strip_prefix(&root_dir)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| todo.path.display().to_string());
+        println!("{}: {} - {}{}{}", i + 1, todo.created, todo.title, project_str, due_str);
+        println!("   {}", display_path);
+    }
+
+    println!("\nTotal: {} todo(s)", todos.len());
+
+    // Prompt for selection
+    print!("Open file (1-{}, or Enter to skip): ", todos.len());
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let input = input.trim();
+
+    if !input.is_empty() {
+        if let Ok(selection) = input.parse::<usize>() {
+            if selection >= 1 && selection <= todos.len() {
+                open_editor(&todos[selection - 1].path, &config.general.editor)?;
+            } else {
+                println!("Invalid selection: {}", selection);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct TodoItem {
+    title: String,
+    status: String,
+    project: String,
+    due: String,
+    created: String,
+    path: PathBuf,
+}
+
+fn parse_frontmatter(content: &str) -> Option<(String, String, String, String, String)> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    if lines.is_empty() || lines[0] != "---" {
+        return None;
+    }
+
+    let mut end_index = None;
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        if *line == "---" {
+            end_index = Some(i);
+            break;
+        }
+    }
+
+    let end_index = end_index?;
+
+    let mut kind = String::new();
+    let mut status = String::new();
+    let mut project = String::new();
+    let mut due = String::new();
+    let mut created = String::new();
+
+    for line in &lines[1..end_index] {
+        if let Some((key, value)) = line.split_once(':') {
+            let key = key.trim();
+            let value = value.trim();
+            match key {
+                "kind" => kind = value.to_string(),
+                "status" => status = value.to_string(),
+                "project" => project = value.to_string(),
+                "due" | "due_date" => due = value.to_string(),
+                "created" | "date" => created = value.to_string(),
+                _ => {}
+            }
+        }
+    }
+
+    Some((kind, status, project, due, created))
+}
+
+fn extract_title(content: &str) -> String {
+    for line in content.lines() {
+        if line.starts_with("# ") {
+            return line[2..].trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn collect_todos(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Some((kind, status, project, due, created)) = parse_frontmatter(&content) {
+                    // Filter: kind=todo and status is not done/canceled
+                    if kind == "todo" && status != "done" && status != "canceled" {
+                        let title = extract_title(&content);
+                        todos.push(TodoItem {
+                            title,
+                            status,
+                            project,
+                            due,
+                            created,
+                            path,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_todos_recursive(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> {
+    if !dir.is_dir() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_todos_recursive(&path, todos)?;
+        } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Some((kind, status, project, due, created)) = parse_frontmatter(&content) {
+                    if kind == "todo" && status != "done" && status != "canceled" {
+                        let title = extract_title(&content);
+                        todos.push(TodoItem {
+                            title,
+                            status,
+                            project,
+                            due,
+                            created,
+                            path,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
