@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::time::Instant;
 use crate::config::Config;
 use crate::utils::{get_current_date, open_editor};
 
@@ -169,13 +171,68 @@ pub fn weekly(config: &Config) -> Result<()> {
     }
 
     match found_file {
-        Some(file_path) => {
-            println!("Found weekly report: {}", file_path.display());
-            open_editor(&file_path, &config.general.editor)?;
+        Some(_file_path) => {
+            // Start braindump session
+            braindump(config, &week_str)?;
         }
         None => {
             println!("No weekly report found for {} (Week {}).", iso_year, week_number);
             println!("\nPlease merge the weekly report PR first.");
+        }
+    }
+
+    Ok(())
+}
+
+fn braindump(config: &Config, week_str: &str) -> Result<()> {
+    let date = get_current_date(&config.general.date_format);
+    let filename = format!("{}-{}-braindump.md", date, week_str);
+    let inbox_dir = config.inbox_dir()?;
+    let file_path = inbox_dir.join(&filename);
+
+    // Create file with header if it doesn't exist
+    if !file_path.exists() {
+        let header = format!("# {} Braindump\n\n", week_str);
+        fs::write(&file_path, header)?;
+    }
+
+    let duration_mins = 10;
+    let duration_secs = duration_mins * 60;
+    let start = Instant::now();
+
+    println!("\n=== Weekly Braindump ({} minutes) ===", duration_mins);
+    println!("Write down everything on your mind. Press Enter after each thought.");
+    println!("Session will end automatically after {} minutes.\n", duration_mins);
+
+    loop {
+        let elapsed = start.elapsed().as_secs();
+        if elapsed >= duration_secs {
+            println!("\n\nTime's up! Braindump session complete.");
+            println!("Saved to: {}", file_path.display());
+            break;
+        }
+
+        let remaining = duration_secs - elapsed;
+        let remaining_mins = remaining / 60;
+        let remaining_secs = remaining % 60;
+
+        print!("[{:02}:{:02}] > ", remaining_mins, remaining_secs);
+        io::stdout().flush()?;
+
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let input = input.trim();
+
+        if !input.is_empty() {
+            // Append to file
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(&file_path)?;
+            writeln!(file, "- {}", input)?;
+
+            // Clear the previous line (move up and clear)
+            print!("\x1b[1A\x1b[2K");
+            io::stdout().flush()?;
         }
     }
 
