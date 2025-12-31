@@ -8,6 +8,26 @@ pub struct Config {
     pub general: GeneralConfig,
     pub templates: TemplateConfig,
     pub directories: DirectoryConfig,
+    #[serde(default)]
+    pub gtd: GtdConfig,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct GtdConfig {
+    #[serde(default = "default_braindump_duration")]
+    pub braindump_duration_mins: u64,
+}
+
+fn default_braindump_duration() -> u64 {
+    10
+}
+
+impl Default for GtdConfig {
+    fn default() -> Self {
+        Self {
+            braindump_duration_mins: default_braindump_duration(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -133,6 +153,7 @@ impl Default for Config {
                 archive: "99999_アーカイブ".to_string(),
                 weekly_report: "00700_メモ/00708_report/00782_WEEKLY".to_string(),
             },
+            gtd: GtdConfig::default(),
         }
     }
 }

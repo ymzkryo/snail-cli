@@ -15,9 +15,24 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, Gauge, Paragraph},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
     Terminal,
 };
+
+// Review section structure
+#[derive(Debug, Clone)]
+struct ReviewSection {
+    title: String,
+    prompts: Vec<ReviewPrompt>,
+}
+
+#[derive(Debug, Clone)]
+struct ReviewPrompt {
+    text: String,
+    indent: usize,
+    responses: Vec<String>,
+}
 
 pub fn today_list(config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
@@ -184,9 +199,9 @@ pub fn weekly(config: &Config) -> Result<()> {
     }
 
     match found_file {
-        Some(_file_path) => {
-            // Start braindump session
-            braindump(config, &week_str)?;
+        Some(weekly_report_path) => {
+            // Start weekly session (braindump + review)
+            run_weekly_session(config, &week_str, &weekly_report_path)?;
         }
         None => {
             println!("No weekly report found for {} (Week {}).", iso_year, week_number);
@@ -197,19 +212,23 @@ pub fn weekly(config: &Config) -> Result<()> {
     Ok(())
 }
 
-fn braindump(config: &Config, week_str: &str) -> Result<()> {
+fn run_weekly_session(config: &Config, week_str: &str, weekly_report_path: &std::path::Path) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
     let filename = format!("{}-{}-braindump.md", date, week_str);
     let inbox_dir = config.inbox_dir()?;
-    let file_path = inbox_dir.join(&filename);
+    let braindump_path = inbox_dir.join(&filename);
 
-    // Create file with header if it doesn't exist
-    if !file_path.exists() {
+    // Create braindump file with header if it doesn't exist
+    if !braindump_path.exists() {
         let header = format!("# {} Braindump\n\n", week_str);
-        fs::write(&file_path, header)?;
+        fs::write(&braindump_path, header)?;
     }
 
-    let duration_mins: u64 = 10;
+    // Parse weekly report for review sections
+    let weekly_content = fs::read_to_string(weekly_report_path)?;
+    let mut sections = parse_review_sections(&weekly_content);
+
+    let duration_mins = config.gtd.braindump_duration_mins;
     let duration_secs = duration_mins * 60;
     let start = Instant::now();
 
@@ -223,9 +242,10 @@ fn braindump(config: &Config, week_str: &str) -> Result<()> {
     let mut input = String::new();
     let mut item_count: usize = 0;
 
-    let result = run_braindump_tui(
+    // Phase 1: Braindump
+    let braindump_result = run_braindump_tui(
         &mut terminal,
-        &file_path,
+        &braindump_path,
         &mut input,
         &mut item_count,
         start,
@@ -233,16 +253,157 @@ fn braindump(config: &Config, week_str: &str) -> Result<()> {
         week_str,
     );
 
+    if braindump_result.is_err() {
+        disable_raw_mode()?;
+        execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+        return braindump_result;
+    }
+
+    // Phase 2: Review
+    input.clear();
+    let review_result = run_review_tui(
+        &mut terminal,
+        &mut sections,
+        &mut input,
+        week_str,
+    );
+
     // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
-    result?;
+    review_result?;
 
-    println!("\nBraindump session complete!");
-    println!("Items recorded: {}", item_count);
-    println!("Saved to: {}", file_path.display());
+    // Update weekly report with review responses
+    let updated_content = build_updated_weekly_report(&weekly_content, &sections);
+    fs::write(weekly_report_path, updated_content)?;
 
+    // Add Obsidian-style link to weekly report
+    let braindump_link = format!("{}-{}-braindump", date, week_str);
+    add_link_to_weekly_report(weekly_report_path, &braindump_link)?;
+
+    println!("\nWeekly session complete!");
+    println!("Braindump items: {}", item_count);
+    println!("Braindump saved to: {}", braindump_path.display());
+    println!("Weekly report updated: {}", weekly_report_path.display());
+
+    Ok(())
+}
+
+fn parse_review_sections(content: &str) -> Vec<ReviewSection> {
+    let mut sections = Vec::new();
+    let mut current_section: Option<ReviewSection> = None;
+
+    // Sections to skip
+    let skip_patterns = ["dailyreport", "daily_report", "daily report"];
+
+    for line in content.lines() {
+        if line.starts_with("## ") {
+            // Save previous section
+            if let Some(section) = current_section.take() {
+                if !section.prompts.is_empty() {
+                    sections.push(section);
+                }
+            }
+            // Start new section (skip DailyReport sections)
+            let title = line[3..].to_string();
+            let title_lower = title.to_lowercase();
+            let should_skip = skip_patterns.iter().any(|p| title_lower.contains(p));
+
+            if !should_skip {
+                current_section = Some(ReviewSection {
+                    title,
+                    prompts: Vec::new(),
+                });
+            } else {
+                current_section = None;
+            }
+        } else if let Some(ref mut section) = current_section {
+            // Check for prompt lines (lines ending with empty marker)
+            let trimmed = line.trim_start_matches(' ');
+            let indent = line.len() - trimmed.len();
+
+            if trimmed.starts_with("- ") && trimmed.len() > 2 {
+                let prompt_text = trimmed[2..].trim();
+                // Only add if it looks like a prompt (not already filled)
+                if !prompt_text.is_empty() {
+                    section.prompts.push(ReviewPrompt {
+                        text: prompt_text.to_string(),
+                        indent,
+                        responses: Vec::new(),
+                    });
+                }
+            }
+        }
+    }
+
+    // Don't forget the last section
+    if let Some(section) = current_section {
+        if !section.prompts.is_empty() {
+            sections.push(section);
+        }
+    }
+
+    sections
+}
+
+fn build_updated_weekly_report(original: &str, sections: &[ReviewSection]) -> String {
+    let mut result = String::new();
+    let mut current_section_idx: Option<usize> = None;
+    let mut prompt_idx = 0;
+
+    for line in original.lines() {
+        if line.starts_with("## ") {
+            let title = &line[3..];
+            current_section_idx = sections.iter().position(|s| s.title == title);
+            prompt_idx = 0;
+            result.push_str(line);
+            result.push('\n');
+        } else if let Some(section_idx) = current_section_idx {
+            let section = &sections[section_idx];
+            let trimmed = line.trim_start_matches(' ');
+
+            if trimmed.starts_with("- ") && prompt_idx < section.prompts.len() {
+                let prompt = &section.prompts[prompt_idx];
+                let indent = " ".repeat(prompt.indent);
+
+                if !prompt.responses.is_empty() {
+                    // Write prompt with responses
+                    result.push_str(&format!("{}- {}\n", indent, prompt.text));
+                    for response in &prompt.responses {
+                        result.push_str(&format!("{}  - {}\n", indent, response));
+                    }
+                } else {
+                    result.push_str(line);
+                    result.push('\n');
+                }
+                prompt_idx += 1;
+            } else {
+                result.push_str(line);
+                result.push('\n');
+            }
+        } else {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    result
+}
+
+fn add_link_to_weekly_report(weekly_report_path: &std::path::Path, link_name: &str) -> Result<()> {
+    // Check if link already exists
+    let content = fs::read_to_string(weekly_report_path)?;
+    let link = format!("[[{}]]", link_name);
+
+    if content.contains(&link) {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(weekly_report_path)?;
+    writeln!(file, "\n{}", link)?;
     Ok(())
 }
 
@@ -338,6 +499,155 @@ fn run_braindump_tui(
                             input.pop();
                         }
                         KeyCode::Esc => {
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_review_tui(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    sections: &mut [ReviewSection],
+    input: &mut String,
+    week_str: &str,
+) -> Result<()> {
+    if sections.is_empty() {
+        return Ok(());
+    }
+
+    let mut section_idx = 0;
+    let mut prompt_idx = 0;
+
+    loop {
+        let section = &sections[section_idx];
+        let total_prompts: usize = sections.iter().map(|s| s.prompts.len()).sum();
+        let current_prompt_num: usize = sections[..section_idx].iter().map(|s| s.prompts.len()).sum::<usize>() + prompt_idx + 1;
+
+        terminal.draw(|frame| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(2)
+                .constraints([
+                    Constraint::Length(3),  // Title
+                    Constraint::Length(3),  // Progress
+                    Constraint::Length(3),  // Section
+                    Constraint::Min(5),     // Prompt list
+                    Constraint::Length(3),  // Input
+                    Constraint::Length(2),  // Help
+                ])
+                .split(frame.area());
+
+            // Title
+            let title = Paragraph::new(format!(" {} Weekly Review", week_str))
+                .style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+                .block(Block::default().borders(Borders::ALL));
+            frame.render_widget(title, chunks[0]);
+
+            // Progress
+            let progress = Paragraph::new(format!(" Question {}/{}", current_prompt_num, total_prompts))
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL));
+            frame.render_widget(progress, chunks[1]);
+
+            // Current section
+            let section_widget = Paragraph::new(format!(" {}", section.title))
+                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .block(Block::default().title(" Section ").borders(Borders::ALL));
+            frame.render_widget(section_widget, chunks[2]);
+
+            // Prompt list with current highlighted
+            let items: Vec<ListItem> = section.prompts.iter().enumerate().map(|(i, p)| {
+                let style = if i == prompt_idx {
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                } else if !p.responses.is_empty() {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
+
+                let marker = if i == prompt_idx {
+                    "▶ "
+                } else if !p.responses.is_empty() {
+                    "✓ "
+                } else {
+                    "  "
+                };
+
+                let count = if !p.responses.is_empty() {
+                    format!(" ({})", p.responses.len())
+                } else {
+                    String::new()
+                };
+
+                ListItem::new(Line::from(vec![
+                    Span::styled(marker, style),
+                    Span::styled(&p.text, style),
+                    Span::styled(count, Style::default().fg(Color::DarkGray)),
+                ]))
+            }).collect();
+
+            let list = List::new(items)
+                .block(Block::default().title(" Prompts ").borders(Borders::ALL));
+            frame.render_widget(list, chunks[3]);
+
+            // Input field
+            let current_prompt = &section.prompts[prompt_idx];
+            let input_widget = Paragraph::new(format!(" > {}_", input))
+                .style(Style::default().fg(Color::White))
+                .block(Block::default()
+                    .title(format!(" {} ", current_prompt.text))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Magenta)));
+            frame.render_widget(input_widget, chunks[4]);
+
+            // Help text
+            let help = Paragraph::new(" Enter: Save & Next | Tab: Skip | Esc: Finish")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(help, chunks[5]);
+        })?;
+
+        // Handle input
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Enter => {
+                            // Add response to current prompt (stay on same prompt)
+                            if !input.is_empty() {
+                                sections[section_idx].prompts[prompt_idx].responses.push(input.clone());
+                                input.clear();
+                            }
+                        }
+                        KeyCode::Tab => {
+                            // Move to next prompt
+                            input.clear();
+                            if prompt_idx + 1 < sections[section_idx].prompts.len() {
+                                prompt_idx += 1;
+                            } else if section_idx + 1 < sections.len() {
+                                section_idx += 1;
+                                prompt_idx = 0;
+                            } else {
+                                // All done
+                                break;
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        KeyCode::Esc => {
+                            // Save current input if any
+                            if !input.is_empty() {
+                                sections[section_idx].prompts[prompt_idx].responses.push(input.clone());
+                            }
                             break;
                         }
                         _ => {}
