@@ -3,9 +3,59 @@ use std::fs;
 use crate::config::Config;
 use crate::utils::{get_current_date, open_editor};
 
-pub fn today_list(_config: &Config) -> Result<()> {
-    println!("GTD today list command - not yet implemented");
+pub fn today_list(config: &Config) -> Result<()> {
+    let date = get_current_date(&config.general.date_format);
+    let filename = format!("{}-daily_report.md", date);
+
+    let inbox_dir = config.inbox_dir()?;
+    let file_path = inbox_dir.join(&filename);
+
+    if !file_path.exists() {
+        println!("No daily report found for today ({}).", date);
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&file_path)
+        .with_context(|| format!("Failed to read daily report: {:?}", file_path))?;
+
+    println!("{} Daily Report:\n", date);
+
+    let todos = extract_todo_section(&content);
+    if todos.is_empty() {
+        println!("No tasks in TODO section.");
+    } else {
+        for task in &todos {
+            println!("{}", task);
+        }
+    }
+
     Ok(())
+}
+
+fn extract_todo_section(content: &str) -> Vec<String> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut todos = Vec::new();
+    let mut in_todo_section = false;
+
+    for line in lines {
+        // Match various TODO section headers
+        let line_lower = line.to_lowercase();
+        if line.starts_with("## ") && (line_lower.contains("todo") || line.contains("ToDo")) {
+            in_todo_section = true;
+            continue;
+        }
+
+        if in_todo_section {
+            if line.starts_with("## ") {
+                break;
+            }
+            if line.starts_with("- ") {
+                todos.push(line.to_string());
+            }
+        }
+    }
+
+    todos
 }
 
 pub fn today_add(task: &str, config: &Config) -> Result<()> {
