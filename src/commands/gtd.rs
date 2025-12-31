@@ -1,10 +1,23 @@
 use anyhow::{Context, Result};
 use chrono::{Datelike, Local};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::time::Instant;
+use std::io::{self, Write as IoWrite};
+use std::time::{Duration, Instant};
 use crate::config::Config;
 use crate::utils::{get_current_date, open_editor};
+
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Gauge, Paragraph},
+    Terminal,
+};
 
 pub fn today_list(config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
@@ -196,43 +209,141 @@ fn braindump(config: &Config, week_str: &str) -> Result<()> {
         fs::write(&file_path, header)?;
     }
 
-    let duration_mins = 10;
+    let duration_mins: u64 = 10;
     let duration_secs = duration_mins * 60;
     let start = Instant::now();
 
-    println!("\n=== Weekly Braindump ({} minutes) ===", duration_mins);
-    println!("Write down everything on your mind. Press Enter after each thought.");
-    println!("Session will end automatically after {} minutes.\n", duration_mins);
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
+    let mut input = String::new();
+    let mut item_count: usize = 0;
+
+    let result = run_braindump_tui(
+        &mut terminal,
+        &file_path,
+        &mut input,
+        &mut item_count,
+        start,
+        duration_secs,
+        week_str,
+    );
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+    result?;
+
+    println!("\nBraindump session complete!");
+    println!("Items recorded: {}", item_count);
+    println!("Saved to: {}", file_path.display());
+
+    Ok(())
+}
+
+fn run_braindump_tui(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    file_path: &std::path::Path,
+    input: &mut String,
+    item_count: &mut usize,
+    start: Instant,
+    duration_secs: u64,
+    week_str: &str,
+) -> Result<()> {
     loop {
         let elapsed = start.elapsed().as_secs();
         if elapsed >= duration_secs {
-            println!("\n\nTime's up! Braindump session complete.");
-            println!("Saved to: {}", file_path.display());
             break;
         }
 
         let remaining = duration_secs - elapsed;
         let remaining_mins = remaining / 60;
         let remaining_secs = remaining % 60;
+        let progress = (elapsed as f64 / duration_secs as f64 * 100.0) as u16;
 
-        print!("[{:02}:{:02}] > ", remaining_mins, remaining_secs);
-        io::stdout().flush()?;
+        terminal.draw(|frame| {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(2)
+                .constraints([
+                    Constraint::Length(3),  // Title
+                    Constraint::Length(3),  // Timer
+                    Constraint::Length(3),  // Stats
+                    Constraint::Min(3),     // Spacer
+                    Constraint::Length(3),  // Input
+                    Constraint::Length(2),  // Help
+                ])
+                .split(frame.area());
 
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim();
+            // Title
+            let title = Paragraph::new(format!(" {} Weekly Braindump", week_str))
+                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .block(Block::default().borders(Borders::ALL));
+            frame.render_widget(title, chunks[0]);
 
-        if !input.is_empty() {
-            // Append to file
-            let mut file = OpenOptions::new()
-                .append(true)
-                .open(&file_path)?;
-            writeln!(file, "- {}", input)?;
+            // Timer gauge
+            let gauge = Gauge::default()
+                .block(Block::default().title(" Time Remaining ").borders(Borders::ALL))
+                .gauge_style(Style::default().fg(Color::Green))
+                .percent(100 - progress)
+                .label(format!("{:02}:{:02}", remaining_mins, remaining_secs));
+            frame.render_widget(gauge, chunks[1]);
 
-            // Clear the previous line (move up and clear)
-            print!("\x1b[1A\x1b[2K");
-            io::stdout().flush()?;
+            // Stats
+            let stats = Paragraph::new(format!(" Items recorded: {}", item_count))
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL));
+            frame.render_widget(stats, chunks[2]);
+
+            // Input field
+            let input_widget = Paragraph::new(format!(" > {}_", input))
+                .style(Style::default().fg(Color::White))
+                .block(Block::default()
+                    .title(" What's on your mind? ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)));
+            frame.render_widget(input_widget, chunks[4]);
+
+            // Help text
+            let help = Paragraph::new(" Enter: Save thought | Esc: End early")
+                .style(Style::default().fg(Color::DarkGray));
+            frame.render_widget(help, chunks[5]);
+        })?;
+
+        // Handle input with timeout
+        if event::poll(Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Enter => {
+                            if !input.is_empty() {
+                                // Save to file
+                                let mut file = OpenOptions::new()
+                                    .append(true)
+                                    .open(file_path)?;
+                                writeln!(file, "- {}", input)?;
+                                *item_count += 1;
+                                input.clear();
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            input.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            input.pop();
+                        }
+                        KeyCode::Esc => {
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 
