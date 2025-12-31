@@ -115,7 +115,7 @@ snail project new myproject
 # Create without opening editor
 snail project new myproject -n
 
-# List all projects (not yet implemented)
+# List all projects (interactive selection to open README)
 snail project list
 
 # Show project details (not yet implemented)
@@ -125,7 +125,7 @@ snail project show myproject
 ### GTD Commands
 
 ```bash
-# List today's tasks (not yet implemented)
+# List today's tasks from daily report
 snail gtd today list
 
 # Add a task to today's daily report
@@ -185,13 +185,13 @@ Templates support the following variables:
 - ✅ `snail todo list` (`-f status:*`, `-f due:*`)
 - ✅ `snail todo done`
 - ✅ `snail project new` (`-n` to skip editor)
+- ✅ `snail project list`
+- ✅ `snail gtd today list`
 - ✅ `snail gtd today add`
 
 ### Planned
 - ⏳ `snail memo search`
-- ⏳ `snail project list`
 - ⏳ `snail project show`
-- ⏳ `snail gtd today list`
 - ⏳ `snail gtd weekly`
 - ⏳ `snail gtd monthly`
 - ⏳ `snail gtd process` (Interactive INBOX processing)
