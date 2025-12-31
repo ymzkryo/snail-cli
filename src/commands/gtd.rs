@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{Datelike, Local};
 use std::fs;
 use crate::config::Config;
 use crate::utils::{get_current_date, open_editor};
@@ -137,8 +138,47 @@ fn add_to_todo_section(content: &str, task: &str) -> String {
     result.join("\n")
 }
 
-pub fn weekly(_config: &Config) -> Result<()> {
-    println!("GTD weekly review command - not yet implemented");
+pub fn weekly(config: &Config) -> Result<()> {
+    let now = Local::now();
+    let iso_week = now.iso_week();
+    let iso_year = iso_week.year();
+    let week_number = iso_week.week();
+    let week_str = format!("W{:02}", week_number);
+
+    let weekly_dir = config.weekly_report_dir()?;
+
+    if !weekly_dir.exists() {
+        println!("Weekly report directory not found: {}", weekly_dir.display());
+        println!("\nPlease merge the weekly report PR first.");
+        return Ok(());
+    }
+
+    // Search for file containing this week's number
+    let mut found_file = None;
+    for entry in fs::read_dir(&weekly_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.contains(&week_str) && name.ends_with(".md") {
+                    found_file = Some(path);
+                    break;
+                }
+            }
+        }
+    }
+
+    match found_file {
+        Some(file_path) => {
+            println!("Found weekly report: {}", file_path.display());
+            open_editor(&file_path, &config.general.editor)?;
+        }
+        None => {
+            println!("No weekly report found for {} (Week {}).", iso_year, week_number);
+            println!("\nPlease merge the weekly report PR first.");
+        }
+    }
+
     Ok(())
 }
 

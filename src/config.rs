@@ -32,6 +32,12 @@ pub struct DirectoryConfig {
     pub someday: String,
     pub project: String,
     pub archive: String,
+    #[serde(default = "default_weekly_report")]
+    pub weekly_report: String,
+}
+
+fn default_weekly_report() -> String {
+    "00700_メモ/00708_report/00782_WEEKLY".to_string()
 }
 
 impl Config {
@@ -86,6 +92,10 @@ impl Config {
         Ok(self.root_dir()?.join(&self.directories.archive))
     }
 
+    pub fn weekly_report_dir(&self) -> Result<PathBuf> {
+        Ok(self.root_dir()?.join(&self.directories.weekly_report))
+    }
+
     pub fn get_template_path(&self, template_name: &str) -> Result<PathBuf> {
         let template_path = match template_name {
             "memo" => &self.templates.memo,
@@ -121,6 +131,7 @@ impl Default for Config {
                 someday: "00500_いつかやる".to_string(),
                 project: "00800_プロジェクト".to_string(),
                 archive: "99999_アーカイブ".to_string(),
+                weekly_report: "00700_メモ/00708_report/00782_WEEKLY".to_string(),
             },
         }
     }
