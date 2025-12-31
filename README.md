@@ -63,7 +63,10 @@ archive = "99999_アーカイブ"
 # Create a new memo
 snail memo new "Meeting notes"
 
-# List all memos (not yet implemented)
+# Create without opening editor
+snail memo new "Meeting notes" -n
+
+# List all memos (interactive selection to open in editor)
 snail memo list
 
 # Search memos (not yet implemented)
@@ -79,16 +82,26 @@ snail todo new "Implement feature X"
 # Create a todo with project assignment
 snail todo new "Fix bug" -p myproject
 
-# List all todos (not yet implemented)
+# Create without opening editor
+snail todo new "Task" -n
+
+# List all active todos (interactive selection to open in editor)
 snail todo list
 
-# List todos with filters (not yet implemented)
-snail todo list -f due:today
+# List todos with filters
 snail todo list -f status:next
-snail todo list -f project:myproject
+snail todo list -f status:inbox
+snail todo list -f due:today
+snail todo list -f due:overdue
+snail todo list -f due:2025-01-15
 
-# Mark a todo as done (not yet implemented)
-snail todo done path/to/todo.md
+# Combine multiple filters
+snail todo list -f status:next -f due:today
+
+# Mark a todo as done (updates status, adds completed date, moves to archive)
+snail todo done 2025-12-31                    # by date
+snail todo done 2025-12-31-task-name.md       # by filename
+snail todo done path/to/todo.md               # by path
 ```
 
 ### Project Commands
@@ -98,6 +111,9 @@ snail todo done path/to/todo.md
 snail project new myproject
 # Creates: 00800_プロジェクト/00831_myproject/YYYY-MM-DD-myproject-README.md
 # (Project number is auto-incremented from existing projects)
+
+# Create without opening editor
+snail project new myproject -n
 
 # List all projects (not yet implemented)
 snail project list
@@ -162,29 +178,23 @@ Templates support the following variables:
 
 ## Development Status
 
-### Implemented (v0.1)
-- ✅ `snail memo new`
-- ✅ `snail todo new`
-- ✅ `snail todo new -p <project>`
-- ✅ `snail project new`
+### Implemented
+- ✅ `snail memo new` (`-n` to skip editor)
+- ✅ `snail memo list`
+- ✅ `snail todo new` (`-p` for project, `-n` to skip editor)
+- ✅ `snail todo list` (`-f status:*`, `-f due:*`)
+- ✅ `snail todo done`
+- ✅ `snail project new` (`-n` to skip editor)
 - ✅ `snail gtd today add`
 
-### Planned (v0.2)
-- ⏳ `snail memo list`
+### Planned
 - ⏳ `snail memo search`
-- ⏳ `snail todo list`
-- ⏳ `snail todo list -f <filters>`
-- ⏳ `snail todo done`
 - ⏳ `snail project list`
 - ⏳ `snail project show`
 - ⏳ `snail gtd today list`
 - ⏳ `snail gtd weekly`
 - ⏳ `snail gtd monthly`
-
-### Planned (v0.3)
 - ⏳ `snail gtd process` (Interactive INBOX processing)
-- ⏳ Project progress calculation
-- ⏳ GitHub Actions integration
 
 ## Architecture
 
