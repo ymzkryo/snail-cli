@@ -1,4 +1,5 @@
 ---
+kind: {{kind}}
 status: inbox
 project: {{project}}
 due:

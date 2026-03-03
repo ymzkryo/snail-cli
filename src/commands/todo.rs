@@ -210,8 +210,8 @@ fn collect_todos(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> {
         if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Some((kind, status, project, due, created)) = parse_frontmatter(&content) {
-                    // Filter: kind=todo and status is not done/canceled
-                    if kind == "todo" && status != "done" && status != "canceled" {
+                    // Filter: kind=todo (or kind empty with status present) and status is not done/canceled
+                    if (kind == "todo" || (kind.is_empty() && !status.is_empty())) && status != "done" && status != "canceled" {
                         let title = extract_title(&content);
                         todos.push(TodoItem {
                             title,
