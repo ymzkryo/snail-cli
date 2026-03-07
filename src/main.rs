@@ -5,7 +5,7 @@ mod utils;
 
 use anyhow::Result;
 use clap::Parser;
-use cli::{Cli, Commands, MemoAction, TodoAction, ProjectAction, GtdAction, TodayAction, FixAction};
+use cli::{Cli, Commands, MemoAction, TodoAction, ProjectAction, GtdAction, TodayAction};
 use config::Config;
 
 fn main() -> Result<()> {
@@ -44,11 +44,6 @@ fn main() -> Result<()> {
             }
             ProjectAction::Show { name } => {
                 commands::project::show(&name, &config)?;
-            }
-        },
-        Commands::Fix { action } => match action {
-            FixAction::Frontmatter { dry_run } => {
-                commands::fix::frontmatter(dry_run, &config)?;
             }
         },
         Commands::Gtd { action } => match action {

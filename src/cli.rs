@@ -30,11 +30,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: GtdAction,
     },
-    /// Fix and maintain notes
-    Fix {
-        #[command(subcommand)]
-        action: FixAction,
-    },
 }
 
 #[derive(Subcommand)]
@@ -98,16 +93,6 @@ pub enum ProjectAction {
     Show {
         /// Project name
         name: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum FixAction {
-    /// Add kind field to front matter of all notes
-    Frontmatter {
-        /// Preview changes without modifying files
-        #[arg(long)]
-        dry_run: bool,
     },
 }
 

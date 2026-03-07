@@ -39,6 +39,8 @@ pub struct GeneralConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TemplateConfig {
+    #[serde(default)]
+    pub base: String,
     pub memo: String,
     pub todo: String,
     pub project: String,
@@ -118,6 +120,7 @@ impl Config {
 
     pub fn get_template_path(&self, template_name: &str) -> Result<PathBuf> {
         let template_path = match template_name {
+            "base" => &self.templates.base,
             "memo" => &self.templates.memo,
             "todo" => &self.templates.todo,
             "project" => &self.templates.project,
@@ -140,6 +143,7 @@ impl Default for Config {
                 date_format: "%Y-%m-%d".to_string(),
             },
             templates: TemplateConfig {
+                base: "~/.config/snail-cli/templates/base.md".to_string(),
                 memo: "~/.config/snail-cli/templates/memo.md".to_string(),
                 todo: "~/.config/snail-cli/templates/todo.md".to_string(),
                 project: "~/.config/snail-cli/templates/project.md".to_string(),

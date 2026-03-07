@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use crate::config::Config;
-use crate::utils::{create_file_from_template, get_current_date, open_editor, sanitize_filename};
+use crate::utils::{create_file_from_base_and_snip, create_file_from_template, get_current_date, open_editor, sanitize_filename};
 
 pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
@@ -13,17 +13,26 @@ pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -
     let inbox_dir = config.inbox_dir()?;
     let file_path = inbox_dir.join(&filename);
 
-    let template_path = config.get_template_path("todo")?;
-
     let project_str = project.unwrap_or("");
     let replacements = vec![
         ("title", title),
         ("date", &date),
-        ("kind", "todo"),
+        ("status", "inbox"),
         ("project", project_str),
     ];
 
-    create_file_from_template(&template_path, &file_path, &replacements)?;
+    let base_path = config.get_template_path("base");
+    let snip_path = config.get_template_path("todo")?;
+
+    if let Ok(base_path) = base_path {
+        if base_path.exists() {
+            create_file_from_base_and_snip(&base_path, &snip_path, &file_path, &replacements)?;
+        } else {
+            create_file_from_template(&snip_path, &file_path, &replacements)?;
+        }
+    } else {
+        create_file_from_template(&snip_path, &file_path, &replacements)?;
+    }
 
     println!("Created todo: {}", file_path.display());
 
@@ -152,7 +161,7 @@ struct TodoItem {
     path: PathBuf,
 }
 
-fn parse_frontmatter(content: &str) -> Option<(String, String, String, String, String)> {
+fn parse_frontmatter(content: &str) -> Option<(String, String, String, String)> {
     let lines: Vec<&str> = content.lines().collect();
 
     if lines.is_empty() || lines[0] != "---" {
@@ -169,7 +178,6 @@ fn parse_frontmatter(content: &str) -> Option<(String, String, String, String, S
 
     let end_index = end_index?;
 
-    let mut kind = String::new();
     let mut status = String::new();
     let mut project = String::new();
     let mut due = String::new();
@@ -180,9 +188,8 @@ fn parse_frontmatter(content: &str) -> Option<(String, String, String, String, S
             let key = key.trim();
             let value = value.trim();
             match key {
-                "kind" => kind = value.to_string(),
                 "status" => status = value.to_string(),
-                "project" => project = value.to_string(),
+                "project" => project = value.trim_matches('"').to_string(),
                 "due" | "due_date" => due = value.to_string(),
                 "created" | "date" => created = value.to_string(),
                 _ => {}
@@ -190,7 +197,7 @@ fn parse_frontmatter(content: &str) -> Option<(String, String, String, String, S
         }
     }
 
-    Some((kind, status, project, due, created))
+    Some((status, project, due, created))
 }
 
 fn extract_title(content: &str) -> String {
@@ -209,9 +216,8 @@ fn collect_todos(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> {
 
         if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((kind, status, project, due, created)) = parse_frontmatter(&content) {
-                    // Filter: kind=todo (or kind empty with status present) and status is not done/canceled
-                    if (kind == "todo" || (kind.is_empty() && !status.is_empty())) && status != "done" && status != "canceled" {
+                if let Some((status, project, due, created)) = parse_frontmatter(&content) {
+                    if !status.is_empty() && status != "done" && status != "canceled" {
                         let title = extract_title(&content);
                         todos.push(TodoItem {
                             title,
@@ -242,8 +248,8 @@ fn collect_todos_recursive(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> 
             collect_todos_recursive(&path, todos)?;
         } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((kind, status, project, due, created)) = parse_frontmatter(&content) {
-                    if kind == "todo" && status != "done" && status != "canceled" {
+                if let Some((status, project, due, created)) = parse_frontmatter(&content) {
+                    if !status.is_empty() && status != "done" && status != "canceled" {
                         let title = extract_title(&content);
                         todos.push(TodoItem {
                             title,

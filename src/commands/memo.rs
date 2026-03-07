@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use crate::config::Config;
-use crate::utils::{create_file_from_template, get_current_date, open_editor, sanitize_filename};
+use crate::utils::{create_file_from_base_and_snip, create_file_from_template, get_current_date, open_editor, sanitize_filename};
 
 pub fn new(title: &str, no_edit: bool, config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
@@ -13,15 +13,25 @@ pub fn new(title: &str, no_edit: bool, config: &Config) -> Result<()> {
     let inbox_dir = config.inbox_dir()?;
     let file_path = inbox_dir.join(&filename);
 
-    let template_path = config.get_template_path("memo")?;
-
     let replacements = vec![
         ("title", title),
         ("date", &date),
-        ("kind", "memo"),
+        ("status", ""),
+        ("project", ""),
     ];
 
-    create_file_from_template(&template_path, &file_path, &replacements)?;
+    let base_path = config.get_template_path("base");
+    let snip_path = config.get_template_path("memo")?;
+
+    if let Ok(base_path) = base_path {
+        if base_path.exists() {
+            create_file_from_base_and_snip(&base_path, &snip_path, &file_path, &replacements)?;
+        } else {
+            create_file_from_template(&snip_path, &file_path, &replacements)?;
+        }
+    } else {
+        create_file_from_template(&snip_path, &file_path, &replacements)?;
+    }
 
     println!("Created memo: {}", file_path.display());
 
@@ -117,7 +127,7 @@ fn parse_frontmatter(content: &str) -> Option<(String, String)> {
 
     let end_index = end_index?;
 
-    let mut kind = String::new();
+    let mut status = String::new();
     let mut created = String::new();
 
     for line in &lines[1..end_index] {
@@ -125,14 +135,14 @@ fn parse_frontmatter(content: &str) -> Option<(String, String)> {
             let key = key.trim();
             let value = value.trim();
             match key {
-                "kind" => kind = value.to_string(),
+                "status" => status = value.to_string(),
                 "created" | "date" => created = value.to_string(),
                 _ => {}
             }
         }
     }
 
-    Some((kind, created))
+    Some((status, created))
 }
 
 fn extract_title(content: &str) -> String {
@@ -151,9 +161,9 @@ fn collect_memos(dir: &Path, memos: &mut Vec<MemoItem>) -> Result<()> {
 
         if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((kind, created)) = parse_frontmatter(&content) {
-                    // Filter: kind=memo or kind is empty
-                    if kind == "memo" || kind.is_empty() {
+                if let Some((status, created)) = parse_frontmatter(&content) {
+                    // memo = status is empty (no active task status)
+                    if status.is_empty() {
                         let title = extract_title(&content);
                         memos.push(MemoItem {
                             title,
@@ -181,8 +191,8 @@ fn collect_memos_recursive(dir: &Path, memos: &mut Vec<MemoItem>) -> Result<()> 
             collect_memos_recursive(&path, memos)?;
         } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
             if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((kind, created)) = parse_frontmatter(&content) {
-                    if kind == "memo" || kind.is_empty() {
+                if let Some((status, created)) = parse_frontmatter(&content) {
+                    if status.is_empty() {
                         let title = extract_title(&content);
                         memos.push(MemoItem {
                             title,
