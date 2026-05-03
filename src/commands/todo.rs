@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use crate::config::Config;
-use crate::utils::{create_file_from_base_and_snip, create_file_from_template, get_current_date, open_editor, sanitize_filename};
+use crate::utils::{create_file_from_base_and_snip, create_file_from_template, get_current_date, open_editor, sanitize_filename, yaml_quote_value};
 
 pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
@@ -14,11 +14,15 @@ pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -
     let file_path = inbox_dir.join(&filename);
 
     let project_str = project.unwrap_or("");
+    let title_yaml = yaml_quote_value(title);
+    let project_yaml = yaml_quote_value(project_str);
     let replacements = vec![
         ("title", title),
+        ("title_yaml", title_yaml.as_str()),
         ("date", &date),
         ("status", "inbox"),
         ("project", project_str),
+        ("project_yaml", project_yaml.as_str()),
     ];
 
     let base_path = config.get_template_path("base");
