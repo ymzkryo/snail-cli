@@ -41,6 +41,9 @@ pub enum MemoAction {
         /// Do not open editor after creating
         #[arg(short = 'n', long)]
         no_edit: bool,
+        /// Reject titles that are not already filename-safe instead of sanitizing
+        #[arg(long)]
+        strict: bool,
     },
     /// List all memos
     List,
@@ -63,6 +66,9 @@ pub enum TodoAction {
         /// Do not open editor after creating
         #[arg(short = 'n', long)]
         no_edit: bool,
+        /// Reject titles that are not already filename-safe instead of sanitizing
+        #[arg(long)]
+        strict: bool,
     },
     /// List all todo tasks
     List {
@@ -86,6 +92,9 @@ pub enum ProjectAction {
         /// Do not open editor after creating
         #[arg(short = 'n', long)]
         no_edit: bool,
+        /// Reject titles that are not already filename-safe instead of sanitizing
+        #[arg(long)]
+        strict: bool,
     },
     /// List all projects
     List,

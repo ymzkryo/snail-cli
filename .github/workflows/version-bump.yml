@@ -29,21 +29,30 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Get current version and bump patch
+      - name: Resolve release version
         id: bump
         run: |
           CURRENT=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
-          MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-          MINOR=$(echo "$CURRENT" | cut -d. -f2)
-          PATCH=$(echo "$CURRENT" | cut -d. -f3)
-          NEW_PATCH=$((PATCH + 1))
-          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+          if git rev-parse -q --verify "refs/tags/v${CURRENT}" >/dev/null; then
+            # Cargo.toml still points at a released version: bump the patch.
+            MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+            MINOR=$(echo "$CURRENT" | cut -d. -f2)
+            PATCH=$(echo "$CURRENT" | cut -d. -f3)
+            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "v${CURRENT} is already released, bumping: $CURRENT -> $NEW_VERSION"
+          else
+            # Version was raised by hand (minor / major): release it as-is.
+            NEW_VERSION="$CURRENT"
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+            echo "Releasing version set in Cargo.toml: $NEW_VERSION"
+          fi
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Bumping version: $CURRENT -> $NEW_VERSION"
 
       - name: Update Cargo.toml
+        if: steps.bump.outputs.bumped == 'true'
         run: |
           sed -i "s/^version = \"${{ steps.bump.outputs.current }}\"/version = \"${{ steps.bump.outputs.new_version }}\"/" Cargo.toml
 
@@ -51,8 +60,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
+          if [ "${{ steps.bump.outputs.bumped }}" = "true" ]; then
+            git add Cargo.toml
+            git commit -m "chore: bump version to ${{ steps.bump.outputs.new_version }} [skip ci]"
+          fi
           git tag "${{ steps.bump.outputs.tag }}"
           git push origin master --tags
 

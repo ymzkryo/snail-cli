@@ -57,6 +57,24 @@ archive = "99999_アーカイブ"
 
 ## Usage
 
+### Filenames
+
+Titles are converted into UNIX-safe filenames before a file is created. Only
+ASCII alphanumerics, `-`, `_`, and Japanese characters (kana / kanji) are kept;
+anything else — full-width punctuation, spaces, and ASCII that needs shell
+escaping — becomes `-`, with runs collapsed and edges trimmed. Full-width ASCII
+is folded to half-width first, so `ＡＰＩ２０２６` stays `API2026`.
+
+```bash
+$ snail memo new "面談メモ（AI活用プロダクト開発案件）" -n
+note: filename sanitized: "面談メモ（AI活用プロダクト開発案件）" -> "面談メモ-AI活用プロダクト開発案件"
+Created memo: .../2026-08-19-面談メモ-AI活用プロダクト開発案件.md
+```
+
+The frontmatter `title:` keeps the original text — only the filename is
+sanitized. Pass `--strict` to `memo new` / `todo new` / `project new` to fail
+instead of rewriting, and fix the title by hand.
+
 ### Memo Commands
 
 ```bash
@@ -65,6 +83,9 @@ snail memo new "Meeting notes"
 
 # Create without opening editor
 snail memo new "Meeting notes" -n
+
+# Reject an unsafe title instead of sanitizing it
+snail memo new "面談メモ（案件）" --strict
 
 # List all memos (interactive selection to open in editor)
 snail memo list
@@ -84,6 +105,9 @@ snail todo new "Fix bug" -p myproject
 
 # Create without opening editor
 snail todo new "Task" -n
+
+# Reject an unsafe title instead of sanitizing it
+snail todo new "出張メモ（8/27-29）" --strict
 
 # List all active todos (interactive selection to open in editor)
 snail todo list
@@ -114,6 +138,9 @@ snail project new myproject
 
 # Create without opening editor
 snail project new myproject -n
+
+# Reject an unsafe name instead of sanitizing it
+snail project new "新規案件（PoC）" --strict
 
 # List all projects (interactive selection to open README)
 snail project list
@@ -179,12 +206,12 @@ Templates support the following variables:
 ## Development Status
 
 ### Implemented
-- ✅ `snail memo new` (`-n` to skip editor)
+- ✅ `snail memo new` (`-n` to skip editor, `--strict` to reject unsafe titles)
 - ✅ `snail memo list`
-- ✅ `snail todo new` (`-p` for project, `-n` to skip editor)
+- ✅ `snail todo new` (`-p` for project, `-n` to skip editor, `--strict` to reject unsafe titles)
 - ✅ `snail todo list` (`-f status:*`, `-f due:*`)
 - ✅ `snail todo done`
-- ✅ `snail project new` (`-n` to skip editor)
+- ✅ `snail project new` (`-n` to skip editor, `--strict` to reject unsafe names)
 - ✅ `snail project list`
 - ✅ `snail gtd today list`
 - ✅ `snail gtd today add`
