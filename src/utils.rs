@@ -83,13 +83,92 @@ pub fn open_editor(file_path: &Path, editor: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn sanitize_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
-            _ => c,
-        })
-        .collect()
+/// Result of converting a user-supplied title into a filename component.
+pub struct SanitizedName {
+    /// The UNIX-safe filename component.
+    pub value: String,
+    /// True when the title had to be altered to become filename-safe.
+    pub changed: bool,
+}
+
+/// Characters kept as-is in generated filenames: ASCII alphanumerics, `-`, `_`,
+/// and Japanese (kana / kanji). Everything else needs escaping in a shell or a
+/// path, so it gets replaced.
+fn is_filename_safe(c: char) -> bool {
+    if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+        return true;
+    }
+
+    matches!(
+        c as u32,
+        0x3005..=0x3007         // 々 〆 〇
+            | 0x3041..=0x309F   // hiragana
+            | 0x30A1..=0x30FA   // katakana (U+30FB `・` deliberately excluded)
+            | 0x30FC..=0x30FF   // ー ヽ ヾ ヿ
+            | 0x3400..=0x4DBF   // CJK extension A
+            | 0x4E00..=0x9FFF   // CJK unified ideographs
+            | 0xF900..=0xFAFF   // CJK compatibility ideographs
+            | 0x20000..=0x2FA1F // CJK extension B and beyond
+    )
+}
+
+/// Fold full-width ASCII and the ideographic space to their half-width form, so
+/// `ＡＢＣ` survives as `ABC` rather than collapsing into separators.
+fn fold_fullwidth(c: char) -> char {
+    match c as u32 {
+        0x3000 => ' ',
+        n @ 0xFF01..=0xFF5E => char::from_u32(n - 0xFEE0).unwrap_or(c),
+        _ => c,
+    }
+}
+
+/// Convert a title into a UNIX-safe filename component.
+///
+/// Unsafe characters become `-`, runs of `-` collapse into one, and leading /
+/// trailing `-` are trimmed. Errors when nothing usable remains.
+pub fn sanitize_filename(title: &str) -> Result<SanitizedName> {
+    let mut value = String::with_capacity(title.len());
+
+    for c in title.chars().map(fold_fullwidth) {
+        let c = if is_filename_safe(c) { c } else { '-' };
+        // Collapse separator runs, whether generated or typed by the user.
+        if c == '-' && value.ends_with('-') {
+            continue;
+        }
+        value.push(c);
+    }
+
+    let value = value.trim_matches('-').to_string();
+    if value.is_empty() {
+        anyhow::bail!("Cannot derive a filename from title: {:?}", title);
+    }
+
+    let changed = value != title;
+    Ok(SanitizedName { value, changed })
+}
+
+/// Resolve the filename component for a new file.
+///
+/// Sanitizes by default and reports what changed; with `strict` set, a title
+/// that is not already filename-safe is rejected instead.
+pub fn filename_component(title: &str, strict: bool) -> Result<String> {
+    let sanitized = sanitize_filename(title)?;
+
+    if sanitized.changed {
+        if strict {
+            anyhow::bail!(
+                "Title is not filename-safe: {:?}\n  sanitized form: {:?}\n  allowed: ASCII alphanumerics, '-', '_', and Japanese characters",
+                title,
+                sanitized.value
+            );
+        }
+        eprintln!(
+            "note: filename sanitized: {:?} -> {:?}",
+            title, sanitized.value
+        );
+    }
+
+    Ok(sanitized.value)
 }
 
 /// Quote a scalar value for safe inclusion in YAML frontmatter.
@@ -166,6 +245,77 @@ fn needs_yaml_quoting(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sanitized(title: &str) -> String {
+        sanitize_filename(title).unwrap().value
+    }
+
+    #[test]
+    fn safe_titles_pass_through_unchanged() {
+        assert_eq!(sanitized("snail-cli"), "snail-cli");
+        assert_eq!(sanitized("面談メモ"), "面談メモ");
+        assert_eq!(sanitized("snail_cli-v2"), "snail_cli-v2");
+        assert!(!sanitize_filename("面談メモ").unwrap().changed);
+    }
+
+    #[test]
+    fn fullwidth_brackets_and_spaces_are_replaced() {
+        assert_eq!(
+            sanitized("面談メモ（AI活用プロダクト開発案件）"),
+            "面談メモ-AI活用プロダクト開発案件"
+        );
+        assert_eq!(sanitized("出張メモ（8/27-29 五反田）"), "出張メモ-8-27-29-五反田");
+    }
+
+    #[test]
+    fn shell_unsafe_ascii_is_replaced() {
+        assert_eq!(sanitized("fix: bug #12 (urgent!)"), "fix-bug-12-urgent");
+        assert_eq!(sanitized("a/b\\c$d&e;f"), "a-b-c-d-e-f");
+        assert_eq!(sanitized("quote \"me\" 'now'"), "quote-me-now");
+    }
+
+    #[test]
+    fn fullwidth_alphanumerics_fold_to_halfwidth() {
+        assert_eq!(sanitized("ＡＰＩ設計２０２６"), "API設計2026");
+    }
+
+    #[test]
+    fn banned_japanese_punctuation_is_replaced() {
+        assert_eq!(sanitized("設計・実装"), "設計-実装");
+        assert_eq!(sanitized("メモ：まとめ"), "メモ-まとめ");
+        assert_eq!(sanitized("全角\u{3000}スペース"), "全角-スペース");
+    }
+
+    #[test]
+    fn prolonged_sound_mark_is_kept() {
+        assert_eq!(sanitized("サーバーレビュー"), "サーバーレビュー");
+    }
+
+    #[test]
+    fn separator_runs_collapse_and_edges_are_trimmed() {
+        assert_eq!(sanitized("  hello   world  "), "hello-world");
+        assert_eq!(sanitized("(((wrapped)))"), "wrapped");
+        assert_eq!(sanitized("a - b"), "a-b");
+    }
+
+    #[test]
+    fn changed_flag_tracks_rewriting() {
+        assert!(sanitize_filename("hello world").unwrap().changed);
+        assert!(!sanitize_filename("hello-world").unwrap().changed);
+    }
+
+    #[test]
+    fn title_without_any_safe_character_is_rejected() {
+        assert!(sanitize_filename("（）／").is_err());
+        assert!(sanitize_filename("").is_err());
+    }
+
+    #[test]
+    fn strict_mode_rejects_unsafe_titles_only() {
+        assert_eq!(filename_component("hello-world", true).unwrap(), "hello-world");
+        assert!(filename_component("hello world", true).is_err());
+        assert_eq!(filename_component("hello world", false).unwrap(), "hello-world");
+    }
 
     #[test]
     fn plain_values_are_unquoted() {

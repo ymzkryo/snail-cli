@@ -3,12 +3,12 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use crate::config::Config;
-use crate::utils::{create_file_from_base_and_snip, create_file_from_template, get_current_date, open_editor, sanitize_filename, yaml_quote_value};
+use crate::utils::{create_file_from_base_and_snip, create_file_from_template, filename_component, get_current_date, open_editor, yaml_quote_value};
 
-pub fn new(title: &str, project: Option<&str>, no_edit: bool, config: &Config) -> Result<()> {
+pub fn new(title: &str, project: Option<&str>, no_edit: bool, strict: bool, config: &Config) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
-    let sanitized_title = sanitize_filename(title);
-    let filename = format!("{}-{}.md", date, sanitized_title);
+    let name = filename_component(title, strict)?;
+    let filename = format!("{}-{}.md", date, name);
 
     let inbox_dir = config.inbox_dir()?;
     let file_path = inbox_dir.join(&filename);

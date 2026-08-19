@@ -3,21 +3,22 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use crate::config::Config;
-use crate::utils::{create_file_from_template, get_current_date, open_editor};
+use crate::utils::{create_file_from_template, filename_component, get_current_date, open_editor};
 
-pub fn new(name: &str, no_edit: bool, config: &Config) -> Result<()> {
+pub fn new(name: &str, no_edit: bool, strict: bool, config: &Config) -> Result<()> {
     let project_dir = config.project_dir()?;
+    let dir_name = filename_component(name, strict)?;
 
     // Find the maximum project number
     let max_number = find_max_project_number(&project_dir)?;
     let new_number = max_number + 1;
 
-    let new_project_dir = project_dir.join(format!("{:05}_{}", new_number, name));
+    let new_project_dir = project_dir.join(format!("{:05}_{}", new_number, dir_name));
     fs::create_dir_all(&new_project_dir)
         .with_context(|| format!("Failed to create project directory: {:?}", new_project_dir))?;
 
     let date = get_current_date(&config.general.date_format);
-    let readme_filename = format!("{}-{}-README.md", date, name);
+    let readme_filename = format!("{}-{}-README.md", date, dir_name);
     let readme_path = new_project_dir.join(&readme_filename);
 
     let template_path = config.get_template_path("project")?;
