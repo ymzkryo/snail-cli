@@ -10,6 +10,33 @@ pub struct Config {
     pub directories: DirectoryConfig,
     #[serde(default)]
     pub gtd: GtdConfig,
+    #[serde(default)]
+    pub tags: TagConfig,
+}
+
+/// Where the tag vocabulary lives and what new notes get tagged with.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct TagConfig {
+    /// Path to the file holding the `[tags]` vocabulary. Empty means
+    /// `<root_dir>/.github/scripts/config.toml`, the vault's own config.
+    #[serde(default)]
+    pub vocabulary: String,
+    /// Tags `snail todo new` applies unless `--tag` supplies its own `type/`.
+    #[serde(default = "default_todo_tags")]
+    pub todo_default: Vec<String>,
+}
+
+fn default_todo_tags() -> Vec<String> {
+    vec!["type/todo".to_string()]
+}
+
+impl Default for TagConfig {
+    fn default() -> Self {
+        Self {
+            vocabulary: String::new(),
+            todo_default: default_todo_tags(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -118,6 +145,16 @@ impl Config {
         Ok(self.root_dir()?.join(&self.directories.weekly_report))
     }
 
+    /// The file holding the tag vocabulary — the vault's own config by default.
+    pub fn tag_vocabulary_path(&self) -> Result<PathBuf> {
+        if self.tags.vocabulary.is_empty() {
+            return Ok(self.root_dir()?.join(".github/scripts/config.toml"));
+        }
+
+        let expanded = shellexpand::tilde(&self.tags.vocabulary);
+        Ok(PathBuf::from(expanded.as_ref()))
+    }
+
     pub fn get_template_path(&self, template_name: &str) -> Result<PathBuf> {
         let template_path = match template_name {
             "base" => &self.templates.base,
@@ -158,6 +195,7 @@ impl Default for Config {
                 weekly_report: "00700_メモ/00708_report/00782_WEEKLY".to_string(),
             },
             gtd: GtdConfig::default(),
+            tags: TagConfig::default(),
         }
     }
 }

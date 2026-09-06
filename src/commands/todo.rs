@@ -1,17 +1,34 @@
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use crate::cli::OutputFormat;
 use crate::config::Config;
-use crate::utils::{create_file_from_base_and_snip, create_file_from_template, filename_component, get_current_date, open_editor, yaml_quote_value};
+use crate::filter::{Filter, SortKey};
+use crate::note::{self, Note};
+use crate::tags::{self, Vocabulary};
+use crate::utils::{create_note, filename_component, get_current_date, open_editor, yaml_quote_value};
 
-pub fn new(title: &str, project: Option<&str>, no_edit: bool, strict: bool, config: &Config) -> Result<()> {
+pub fn new(
+    title: &str,
+    project: Option<&str>,
+    requested_tags: &[String],
+    no_edit: bool,
+    strict: bool,
+    config: &Config,
+) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
     let name = filename_component(title, strict)?;
     let filename = format!("{}-{}.md", date, name);
 
     let inbox_dir = config.inbox_dir()?;
     let file_path = inbox_dir.join(&filename);
+
+    let note_tags = tags::resolve(&config.tags.todo_default, requested_tags);
+    if let Some(vocabulary) = Vocabulary::load(&config.tag_vocabulary_path()?)? {
+        vocabulary.validate(&note_tags)?;
+    }
 
     let project_str = project.unwrap_or("");
     let title_yaml = yaml_quote_value(title);
@@ -25,18 +42,10 @@ pub fn new(title: &str, project: Option<&str>, no_edit: bool, strict: bool, conf
         ("project_yaml", project_yaml.as_str()),
     ];
 
-    let base_path = config.get_template_path("base");
+    let base_path = config.get_template_path("base").ok().filter(|p| p.exists());
     let snip_path = config.get_template_path("todo")?;
 
-    if let Ok(base_path) = base_path {
-        if base_path.exists() {
-            create_file_from_base_and_snip(&base_path, &snip_path, &file_path, &replacements)?;
-        } else {
-            create_file_from_template(&snip_path, &file_path, &replacements)?;
-        }
-    } else {
-        create_file_from_template(&snip_path, &file_path, &replacements)?;
-    }
+    create_note(base_path.as_deref(), &snip_path, &file_path, &replacements, &note_tags)?;
 
     println!("Created todo: {}", file_path.display());
 
@@ -47,89 +56,93 @@ pub fn new(title: &str, project: Option<&str>, no_edit: bool, strict: bool, conf
     Ok(())
 }
 
-pub fn list(filters: &[String], config: &Config) -> Result<()> {
-    let mut todos: Vec<TodoItem> = Vec::new();
+pub fn list(filters: &[String], sort: SortKey, format: OutputFormat, config: &Config) -> Result<()> {
+    let filter = Filter::parse(filters)?;
     let root_dir = config.root_dir()?;
     let today = get_current_date(&config.general.date_format);
 
-    // Parse filters
-    let mut status_filter: Option<String> = None;
-    let mut due_filter: Option<String> = None;
+    let mut todos = collect_todos(config)?;
+    todos.retain(|todo| filter.matches(todo, &today));
+    sort.apply(&mut todos);
 
-    for filter in filters {
-        if let Some((key, value)) = filter.split_once(':') {
-            match key {
-                "status" => status_filter = Some(value.to_string()),
-                "due" => due_filter = Some(value.to_string()),
-                _ => {}
-            }
-        }
+    match format {
+        OutputFormat::Json => print_json(&todos, &root_dir),
+        OutputFormat::Text => print_text(&todos, &root_dir, config),
     }
+}
 
-    // Search in INBOX, NEXTACTION, and project directories
-    let search_dirs = vec![
-        config.inbox_dir()?,
-        config.next_dir()?,
-    ];
+/// Gather every open task from INBOX, NEXTACTION, and the project tree.
+fn collect_todos(config: &Config) -> Result<Vec<Note>> {
+    let mut notes: Vec<Note> = Vec::new();
 
-    for dir in search_dirs {
-        if dir.exists() {
-            collect_todos(&dir, &mut todos)?;
-        }
-    }
+    note::collect(&config.inbox_dir()?, false, &mut notes)?;
+    note::collect(&config.next_dir()?, false, &mut notes)?;
+    note::collect(&config.project_dir()?, true, &mut notes)?;
 
-    // Search in project directories (recursive)
-    let project_dir = config.project_dir()?;
-    if project_dir.exists() {
-        collect_todos_recursive(&project_dir, &mut todos)?;
-    }
+    notes.retain(|note| note.is_active_todo());
+    Ok(notes)
+}
 
-    // Apply filters
-    if let Some(ref status) = status_filter {
-        todos.retain(|t| t.status == *status);
-    }
+/// Path shown to the user: relative to the vault root when it lives inside it.
+fn display_path(path: &Path, root_dir: &Path) -> String {
+    path.strip_prefix(root_dir)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
 
-    if let Some(ref due) = due_filter {
-        match due.as_str() {
-            "today" => {
-                todos.retain(|t| t.due == today);
-            }
-            "overdue" => {
-                todos.retain(|t| !t.due.is_empty() && t.due < today);
-            }
-            _ => {
-                // Treat as exact date match
-                todos.retain(|t| t.due == *due);
-            }
-        }
-    }
+/// The JSON shape consumed by scripts and skills. Field names match the
+/// frontmatter keys so the mapping stays obvious.
+#[derive(Serialize)]
+struct TodoJson<'a> {
+    path: String,
+    title: &'a str,
+    status: &'a str,
+    due_date: &'a str,
+    review_date: &'a str,
+    project: &'a str,
+    context: &'a str,
+    estimate: &'a str,
+    tags: &'a [String],
+}
 
+fn print_json(todos: &[Note], root_dir: &Path) -> Result<()> {
+    let items: Vec<TodoJson> = todos
+        .iter()
+        .map(|todo| TodoJson {
+            path: display_path(&todo.path, root_dir),
+            title: &todo.title,
+            status: &todo.status,
+            due_date: &todo.due_date,
+            review_date: &todo.review_date,
+            project: &todo.project,
+            context: &todo.context,
+            estimate: &todo.estimate,
+            tags: &todo.tags,
+        })
+        .collect();
+
+    println!("{}", serde_json::to_string_pretty(&items)?);
+    Ok(())
+}
+
+fn print_text(todos: &[Note], root_dir: &Path, config: &Config) -> Result<()> {
     if todos.is_empty() {
         println!("No active todos found.");
         return Ok(());
     }
 
-    // Sort by created date (newest first)
-    todos.sort_by(|a, b| b.created.cmp(&a.created));
-
-    // Display todos
     for (i, todo) in todos.iter().enumerate() {
-        let project_str = if todo.project.is_empty() {
-            String::new()
-        } else {
-            format!(" [{}]", todo.project)
-        };
-        let due_str = if todo.due.is_empty() {
-            String::new()
-        } else {
-            format!(" (due: {})", todo.due)
-        };
-        // Show path relative to root_dir
-        let display_path = todo.path.strip_prefix(&root_dir)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| todo.path.display().to_string());
-        println!("{}: {} - {}{}{}", i + 1, todo.created, todo.title, project_str, due_str);
-        println!("   {}", display_path);
+        println!(
+            "{}: {} - {}{}{}{}",
+            i + 1,
+            todo.created,
+            todo.title,
+            optional(&todo.project, " [{}]"),
+            optional(&todo.context, " {}"),
+            optional(&todo.due_date, " (due: {})"),
+        );
+        println!("   {}", display_path(&todo.path, root_dir));
     }
 
     println!("\nTotal: {} todo(s)", todos.len());
@@ -155,121 +168,13 @@ pub fn list(filters: &[String], config: &Config) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-struct TodoItem {
-    title: String,
-    status: String,
-    project: String,
-    due: String,
-    created: String,
-    path: PathBuf,
-}
-
-fn parse_frontmatter(content: &str) -> Option<(String, String, String, String)> {
-    let lines: Vec<&str> = content.lines().collect();
-
-    if lines.is_empty() || lines[0] != "---" {
-        return None;
+/// Render `value` into `template`'s `{}` slot, or nothing when it is empty.
+fn optional(value: &str, template: &str) -> String {
+    if value.is_empty() {
+        String::new()
+    } else {
+        template.replace("{}", value)
     }
-
-    let mut end_index = None;
-    for (i, line) in lines.iter().enumerate().skip(1) {
-        if *line == "---" {
-            end_index = Some(i);
-            break;
-        }
-    }
-
-    let end_index = end_index?;
-
-    let mut status = String::new();
-    let mut project = String::new();
-    let mut due = String::new();
-    let mut created = String::new();
-
-    for line in &lines[1..end_index] {
-        if let Some((key, value)) = line.split_once(':') {
-            let key = key.trim();
-            let value = value.trim();
-            match key {
-                "status" => status = value.to_string(),
-                "project" => project = value.trim_matches('"').to_string(),
-                "due" | "due_date" => due = value.to_string(),
-                "created" | "date" => created = value.to_string(),
-                _ => {}
-            }
-        }
-    }
-
-    Some((status, project, due, created))
-}
-
-fn extract_title(content: &str) -> String {
-    for line in content.lines() {
-        if line.starts_with("# ") {
-            return line[2..].trim().to_string();
-        }
-    }
-    String::new()
-}
-
-fn collect_todos(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((status, project, due, created)) = parse_frontmatter(&content) {
-                    if !status.is_empty() && status != "done" && status != "canceled" {
-                        let title = extract_title(&content);
-                        todos.push(TodoItem {
-                            title,
-                            status,
-                            project,
-                            due,
-                            created,
-                            path,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn collect_todos_recursive(dir: &Path, todos: &mut Vec<TodoItem>) -> Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            collect_todos_recursive(&path, todos)?;
-        } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((status, project, due, created)) = parse_frontmatter(&content) {
-                    if !status.is_empty() && status != "done" && status != "canceled" {
-                        let title = extract_title(&content);
-                        todos.push(TodoItem {
-                            title,
-                            status,
-                            project,
-                            due,
-                            created,
-                            path,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 pub fn done(file: &str, config: &Config) -> Result<()> {

@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use crate::config::Config;
-use crate::utils::{create_file_from_template, filename_component, get_current_date, open_editor};
+use crate::utils::{create_note, filename_component, get_current_date, open_editor};
 
 pub fn new(name: &str, no_edit: bool, strict: bool, config: &Config) -> Result<()> {
     let project_dir = config.project_dir()?;
@@ -28,7 +28,7 @@ pub fn new(name: &str, no_edit: bool, strict: bool, config: &Config) -> Result<(
         ("date", &date),
     ];
 
-    create_file_from_template(&template_path, &readme_path, &replacements)?;
+    create_note(None, &template_path, &readme_path, &replacements, &[])?;
 
     println!("Created project: {}", new_project_dir.display());
     println!("README: {}", readme_path.display());

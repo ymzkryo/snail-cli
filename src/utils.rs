@@ -8,19 +8,25 @@ pub fn get_current_date(format: &str) -> String {
     Local::now().format(format).to_string()
 }
 
-pub fn create_file_from_template(
-    template_path: &Path,
+/// Render a note from an optional base template plus a snippet template, then
+/// write it out.
+///
+/// `tags` sets the frontmatter `tags:` list when non-empty; an empty slice
+/// leaves whatever the template declares.
+pub fn create_note(
+    base_path: Option<&Path>,
+    snip_path: &Path,
     output_path: &Path,
     replacements: &[(&str, &str)],
+    tags: &[String],
 ) -> Result<()> {
-    let template_content = if template_path.exists() {
-        fs::read_to_string(template_path)
-            .with_context(|| format!("Failed to read template: {:?}", template_path))?
-    } else {
-        anyhow::bail!("Template file not found: {:?}", template_path);
+    let content = match base_path {
+        Some(base_path) => render_base_and_snip(base_path, snip_path, replacements)?,
+        None => render_template(snip_path, replacements)?,
     };
 
-    let content = apply_replacements(&template_content, replacements);
+    let content = set_frontmatter_tags(&content, tags);
+    let content = trim_frontmatter_line_ends(&content);
 
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent)
@@ -33,12 +39,22 @@ pub fn create_file_from_template(
     Ok(())
 }
 
-pub fn create_file_from_base_and_snip(
+fn render_template(template_path: &Path, replacements: &[(&str, &str)]) -> Result<String> {
+    if !template_path.exists() {
+        anyhow::bail!("Template file not found: {:?}", template_path);
+    }
+
+    let template_content = fs::read_to_string(template_path)
+        .with_context(|| format!("Failed to read template: {:?}", template_path))?;
+
+    Ok(apply_replacements(&template_content, replacements))
+}
+
+fn render_base_and_snip(
     base_path: &Path,
     snip_path: &Path,
-    output_path: &Path,
     replacements: &[(&str, &str)],
-) -> Result<()> {
+) -> Result<String> {
     let base_content = fs::read_to_string(base_path)
         .with_context(|| format!("Failed to read base template: {:?}", base_path))?;
     let snip_content = fs::read_to_string(snip_path)
@@ -46,20 +62,9 @@ pub fn create_file_from_base_and_snip(
 
     let snip_replaced = apply_replacements(&snip_content, replacements);
     let mut all_replacements: Vec<(&str, &str)> = replacements.to_vec();
-    let body_key = "body";
-    all_replacements.push((body_key, &snip_replaced));
+    all_replacements.push(("body", &snip_replaced));
 
-    let content = apply_replacements(&base_content, &all_replacements);
-
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory: {:?}", parent))?;
-    }
-
-    fs::write(output_path, content)
-        .with_context(|| format!("Failed to write file: {:?}", output_path))?;
-
-    Ok(())
+    Ok(apply_replacements(&base_content, &all_replacements))
 }
 
 fn apply_replacements(template: &str, replacements: &[(&str, &str)]) -> String {
@@ -72,6 +77,95 @@ fn apply_replacements(template: &str, replacements: &[(&str, &str)]) -> String {
         content = content.replace(&uppercase_key, value);
     }
     content
+}
+
+/// Locate the frontmatter block, returning `(first_field_line, closing_fence)`
+/// indices into `lines`.
+fn frontmatter_bounds(lines: &[&str]) -> Option<(usize, usize)> {
+    if lines.first() != Some(&"---") {
+        return None;
+    }
+    let end = lines.iter().skip(1).position(|l| *l == "---")? + 1;
+    Some((1, end))
+}
+
+/// Join lines back into a document, restoring the trailing newline when the
+/// original had one.
+fn join_lines(lines: &[String], had_trailing_newline: bool) -> String {
+    let mut out = lines.join("\n");
+    if had_trailing_newline {
+        out.push('\n');
+    }
+    out
+}
+
+/// Drop trailing whitespace from every frontmatter line.
+///
+/// A template placeholder that expands to nothing (`status: {{STATUS}}` for a
+/// memo) otherwise leaves `status: ` behind, which the vault's validator flags.
+/// Only the frontmatter is touched, so a body relying on two-space Markdown
+/// line breaks is left alone.
+fn trim_frontmatter_line_ends(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let Some((start, end)) = frontmatter_bounds(&lines) else {
+        return content.to_string();
+    };
+
+    let trimmed: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            if (start..end).contains(&i) {
+                line.trim_end().to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+
+    join_lines(&trimmed, content.ends_with('\n'))
+}
+
+/// Set the frontmatter `tags:` list, replacing an existing entry (including a
+/// block sequence) or inserting one before the closing fence.
+fn set_frontmatter_tags(content: &str, tags: &[String]) -> String {
+    if tags.is_empty() {
+        return content.to_string();
+    }
+
+    let lines: Vec<&str> = content.lines().collect();
+    let Some((start, end)) = frontmatter_bounds(&lines) else {
+        return content.to_string();
+    };
+
+    let rendered = format!("tags: [{}]", tags.join(", "));
+    let mut out: Vec<String> = lines[..start].iter().map(|l| l.to_string()).collect();
+    let mut replaced = false;
+    let mut skipping_sequence = false;
+
+    for line in &lines[start..end] {
+        if line.starts_with("tags:") {
+            out.push(rendered.clone());
+            replaced = true;
+            // A block sequence continues on the following indented `- ` lines.
+            skipping_sequence = line.trim_end() == "tags:";
+            continue;
+        }
+        if skipping_sequence {
+            if line.starts_with(char::is_whitespace) && line.trim_start().starts_with('-') {
+                continue;
+            }
+            skipping_sequence = false;
+        }
+        out.push(line.to_string());
+    }
+
+    if !replaced {
+        out.push(rendered);
+    }
+    out.extend(lines[end..].iter().map(|l| l.to_string()));
+
+    join_lines(&out, content.ends_with('\n'))
 }
 
 pub fn open_editor(file_path: &Path, editor: &str) -> Result<()> {
@@ -315,6 +409,64 @@ mod tests {
         assert_eq!(filename_component("hello-world", true).unwrap(), "hello-world");
         assert!(filename_component("hello world", true).is_err());
         assert_eq!(filename_component("hello world", false).unwrap(), "hello-world");
+    }
+
+    #[test]
+    fn frontmatter_trailing_space_is_trimmed() {
+        let content = "---\nstatus: \ndate: 2026-09-06\n---\n\nbody\n";
+        assert_eq!(
+            trim_frontmatter_line_ends(content),
+            "---\nstatus:\ndate: 2026-09-06\n---\n\nbody\n"
+        );
+    }
+
+    #[test]
+    fn trailing_space_outside_frontmatter_is_left_alone() {
+        // Two trailing spaces are a Markdown line break; only frontmatter is touched.
+        let content = "---\nstatus: \n---\n\nline one  \nline two\n";
+        assert_eq!(
+            trim_frontmatter_line_ends(content),
+            "---\nstatus:\n---\n\nline one  \nline two\n"
+        );
+    }
+
+    #[test]
+    fn documents_without_frontmatter_are_untouched() {
+        let content = "# heading  \nbody  \n";
+        assert_eq!(trim_frontmatter_line_ends(content), content);
+    }
+
+    #[test]
+    fn tags_replace_the_existing_frontmatter_entry() {
+        let content = "---\nstatus: inbox\ntags: []\ncontext:\n---\n\n# t\n";
+        assert_eq!(
+            set_frontmatter_tags(content, &["type/todo".to_string(), "topic/rust".to_string()]),
+            "---\nstatus: inbox\ntags: [type/todo, topic/rust]\ncontext:\n---\n\n# t\n"
+        );
+    }
+
+    #[test]
+    fn tags_are_inserted_when_the_template_has_none() {
+        let content = "---\nstatus: inbox\n---\n\n# t\n";
+        assert_eq!(
+            set_frontmatter_tags(content, &["type/todo".to_string()]),
+            "---\nstatus: inbox\ntags: [type/todo]\n---\n\n# t\n"
+        );
+    }
+
+    #[test]
+    fn tags_replace_a_block_sequence_entry() {
+        let content = "---\ntags:\n  - old\n  - older\nstatus: inbox\n---\n";
+        assert_eq!(
+            set_frontmatter_tags(content, &["type/todo".to_string()]),
+            "---\ntags: [type/todo]\nstatus: inbox\n---\n"
+        );
+    }
+
+    #[test]
+    fn no_tags_leaves_the_template_as_is() {
+        let content = "---\ntags: []\n---\n";
+        assert_eq!(set_frontmatter_tags(content, &[]), content);
     }
 
     #[test]
