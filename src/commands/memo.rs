@@ -1,17 +1,31 @@
 use anyhow::Result;
-use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
 use crate::config::Config;
-use crate::utils::{create_file_from_base_and_snip, create_file_from_template, filename_component, get_current_date, open_editor, yaml_quote_value};
+use crate::note::{self, Note};
+use crate::tags::Vocabulary;
+use crate::utils::{create_note, filename_component, get_current_date, open_editor, yaml_quote_value};
 
-pub fn new(title: &str, no_edit: bool, strict: bool, config: &Config) -> Result<()> {
+pub fn new(
+    title: &str,
+    requested_tags: &[String],
+    no_edit: bool,
+    strict: bool,
+    config: &Config,
+) -> Result<()> {
     let date = get_current_date(&config.general.date_format);
     let name = filename_component(title, strict)?;
     let filename = format!("{}-{}.md", date, name);
 
     let inbox_dir = config.inbox_dir()?;
     let file_path = inbox_dir.join(&filename);
+
+    let note_tags = crate::tags::resolve(&[], requested_tags);
+    if let Some(vocabulary) = Vocabulary::load(&config.tag_vocabulary_path()?)? {
+        vocabulary.validate(&note_tags)?;
+    }
+    if !note_tags.iter().any(|tag| tag.starts_with("type/")) {
+        eprintln!("note: no type/ tag set; pass --tag type/<...> to satisfy the vault check");
+    }
 
     let title_yaml = yaml_quote_value(title);
     let project_yaml = yaml_quote_value("");
@@ -24,18 +38,10 @@ pub fn new(title: &str, no_edit: bool, strict: bool, config: &Config) -> Result<
         ("project_yaml", project_yaml.as_str()),
     ];
 
-    let base_path = config.get_template_path("base");
+    let base_path = config.get_template_path("base").ok().filter(|p| p.exists());
     let snip_path = config.get_template_path("memo")?;
 
-    if let Ok(base_path) = base_path {
-        if base_path.exists() {
-            create_file_from_base_and_snip(&base_path, &snip_path, &file_path, &replacements)?;
-        } else {
-            create_file_from_template(&snip_path, &file_path, &replacements)?;
-        }
-    } else {
-        create_file_from_template(&snip_path, &file_path, &replacements)?;
-    }
+    create_note(base_path.as_deref(), &snip_path, &file_path, &replacements, &note_tags)?;
 
     println!("Created memo: {}", file_path.display());
 
@@ -47,26 +53,15 @@ pub fn new(title: &str, no_edit: bool, strict: bool, config: &Config) -> Result<
 }
 
 pub fn list(config: &Config) -> Result<()> {
-    let mut memos: Vec<MemoItem> = Vec::new();
     let root_dir = config.root_dir()?;
 
-    // Search in INBOX, NEXTACTION, and project directories
-    let search_dirs = vec![
-        config.inbox_dir()?,
-        config.next_dir()?,
-    ];
+    let mut memos: Vec<Note> = Vec::new();
+    note::collect(&config.inbox_dir()?, false, &mut memos)?;
+    note::collect(&config.next_dir()?, false, &mut memos)?;
+    note::collect(&config.project_dir()?, true, &mut memos)?;
 
-    for dir in search_dirs {
-        if dir.exists() {
-            collect_memos(&dir, &mut memos)?;
-        }
-    }
-
-    // Search in project directories (recursive)
-    let project_dir = config.project_dir()?;
-    if project_dir.exists() {
-        collect_memos_recursive(&project_dir, &mut memos)?;
-    }
+    // A memo is a note with no task status.
+    memos.retain(|memo| memo.is_memo());
 
     if memos.is_empty() {
         println!("No memos found.");
@@ -79,8 +74,9 @@ pub fn list(config: &Config) -> Result<()> {
     // Display memos
     for (i, memo) in memos.iter().enumerate() {
         let display_path = memo.path.strip_prefix(&root_dir)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| memo.path.display().to_string());
+            .unwrap_or(&memo.path)
+            .display()
+            .to_string();
         println!("{}: {} - {}", i + 1, memo.created, memo.title);
         println!("   {}", display_path);
     }
@@ -101,110 +97,6 @@ pub fn list(config: &Config) -> Result<()> {
                 open_editor(&memos[selection - 1].path, &config.general.editor)?;
             } else {
                 println!("Invalid selection: {}", selection);
-            }
-        }
-    }
-
-    Ok(())
-}
-
-struct MemoItem {
-    title: String,
-    created: String,
-    path: PathBuf,
-}
-
-fn parse_frontmatter(content: &str) -> Option<(String, String)> {
-    let lines: Vec<&str> = content.lines().collect();
-
-    if lines.is_empty() || lines[0] != "---" {
-        return None;
-    }
-
-    let mut end_index = None;
-    for (i, line) in lines.iter().enumerate().skip(1) {
-        if *line == "---" {
-            end_index = Some(i);
-            break;
-        }
-    }
-
-    let end_index = end_index?;
-
-    let mut status = String::new();
-    let mut created = String::new();
-
-    for line in &lines[1..end_index] {
-        if let Some((key, value)) = line.split_once(':') {
-            let key = key.trim();
-            let value = value.trim();
-            match key {
-                "status" => status = value.to_string(),
-                "created" | "date" => created = value.to_string(),
-                _ => {}
-            }
-        }
-    }
-
-    Some((status, created))
-}
-
-fn extract_title(content: &str) -> String {
-    for line in content.lines() {
-        if line.starts_with("# ") {
-            return line[2..].trim().to_string();
-        }
-    }
-    String::new()
-}
-
-fn collect_memos(dir: &Path, memos: &mut Vec<MemoItem>) -> Result<()> {
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((status, created)) = parse_frontmatter(&content) {
-                    // memo = status is empty (no active task status)
-                    if status.is_empty() {
-                        let title = extract_title(&content);
-                        memos.push(MemoItem {
-                            title,
-                            created,
-                            path,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn collect_memos_recursive(dir: &Path, memos: &mut Vec<MemoItem>) -> Result<()> {
-    if !dir.is_dir() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.is_dir() {
-            collect_memos_recursive(&path, memos)?;
-        } else if path.is_file() && path.extension().map(|e| e == "md").unwrap_or(false) {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Some((status, created)) = parse_frontmatter(&content) {
-                    if status.is_empty() {
-                        let title = extract_title(&content);
-                        memos.push(MemoItem {
-                            title,
-                            created,
-                            path,
-                        });
-                    }
-                }
             }
         }
     }

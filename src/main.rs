@@ -1,6 +1,9 @@
 mod cli;
 mod commands;
 mod config;
+mod filter;
+mod note;
+mod tags;
 mod utils;
 
 use anyhow::Result;
@@ -14,8 +17,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Memo { action } => match action {
-            MemoAction::New { title, no_edit, strict } => {
-                commands::memo::new(&title, no_edit, strict, &config)?;
+            MemoAction::New { title, tags, no_edit, strict } => {
+                commands::memo::new(&title, &tags, no_edit, strict, &config)?;
             }
             MemoAction::List => {
                 commands::memo::list(&config)?;
@@ -25,11 +28,11 @@ fn main() -> Result<()> {
             }
         },
         Commands::Todo { action } => match action {
-            TodoAction::New { title, project, no_edit, strict } => {
-                commands::todo::new(&title, project.as_deref(), no_edit, strict, &config)?;
+            TodoAction::New { title, project, tags, no_edit, strict } => {
+                commands::todo::new(&title, project.as_deref(), &tags, no_edit, strict, &config)?;
             }
-            TodoAction::List { filter } => {
-                commands::todo::list(&filter, &config)?;
+            TodoAction::List { filter, sort, format } => {
+                commands::todo::list(&filter, sort, format, &config)?;
             }
             TodoAction::Done { file } => {
                 commands::todo::done(&file, &config)?;

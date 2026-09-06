@@ -1,4 +1,6 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+use crate::filter::SortKey;
 
 #[derive(Parser)]
 #[command(name = "snail", version)]
@@ -38,6 +40,9 @@ pub enum MemoAction {
     New {
         /// Title of the memo
         title: String,
+        /// Frontmatter tag, repeatable (e.g. "type/tech", "topic/rust")
+        #[arg(short = 't', long = "tag")]
+        tags: Vec<String>,
         /// Do not open editor after creating
         #[arg(short = 'n', long)]
         no_edit: bool,
@@ -63,6 +68,9 @@ pub enum TodoAction {
         /// Project name
         #[arg(short, long)]
         project: Option<String>,
+        /// Extra frontmatter tag, repeatable (defaults to "type/todo")
+        #[arg(short = 't', long = "tag")]
+        tags: Vec<String>,
         /// Do not open editor after creating
         #[arg(short = 'n', long)]
         no_edit: bool,
@@ -72,9 +80,22 @@ pub enum TodoAction {
     },
     /// List all todo tasks
     List {
-        /// Filter option (e.g., "due:today", "status:next", "project:hoge")
-        #[arg(short, long)]
+        /// Filter terms, comma-separated and repeatable; all terms must match.
+        ///
+        /// Keys: status, project, context, due, review.
+        /// Date values: today, overdue, reached, missing, or YYYY-MM-DD.
+        /// Text values: the frontmatter value, or missing.
+        /// Unknown keys and values are errors, not empty results.
+        ///
+        /// e.g. "status:next,context:@computer", "status:scheduled,due:reached"
+        #[arg(short, long, verbatim_doc_comment)]
         filter: Vec<String>,
+        /// Field to order by
+        #[arg(short, long, value_enum, default_value_t = SortKey::Created)]
+        sort: SortKey,
+        /// Output format; json skips the interactive prompt
+        #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+        format: OutputFormat,
     },
     /// Mark a todo as done
     Done {
@@ -127,4 +148,13 @@ pub enum TodayAction {
         /// Task description
         task: String,
     },
+}
+
+/// How `snail todo list` prints its results.
+#[derive(Debug, Clone, Copy, PartialEq, ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable listing with an interactive prompt to open a file.
+    Text,
+    /// One JSON array of note objects, for scripts and skills.
+    Json,
 }
