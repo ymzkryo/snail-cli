@@ -100,7 +100,6 @@ pub fn list(config: &Config) -> Result<()> {
             projects.push(ProjectItem {
                 number,
                 name,
-                path,
                 readme,
             });
         }
@@ -150,7 +149,6 @@ pub fn list(config: &Config) -> Result<()> {
 struct ProjectItem {
     number: u32,
     name: String,
-    path: PathBuf,
     readme: Option<PathBuf>,
 }
 

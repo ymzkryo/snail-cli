@@ -111,11 +111,6 @@ impl Config {
         Ok(PathBuf::from(config_dir.as_ref()).join("config.toml"))
     }
 
-    pub fn template_dir() -> Result<PathBuf> {
-        let config_dir = shellexpand::tilde("~/.config/snail-cli");
-        Ok(PathBuf::from(config_dir.as_ref()).join("templates"))
-    }
-
     pub fn root_dir(&self) -> Result<PathBuf> {
         let expanded = shellexpand::tilde(&self.general.root_dir);
         Ok(PathBuf::from(expanded.as_ref()))
