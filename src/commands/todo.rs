@@ -71,12 +71,15 @@ pub fn list(filters: &[String], sort: SortKey, format: OutputFormat, config: &Co
     }
 }
 
-/// Gather every open task from INBOX, NEXTACTION, and the project tree.
+/// Gather every open task from INBOX, NEXTACTION, the someday tree, and the
+/// project tree. Someday and project directories are nested (e.g.
+/// `00500_いつかやる/00502_買いたいもの/`), so both are walked recursively.
 fn collect_todos(config: &Config) -> Result<Vec<Note>> {
     let mut notes: Vec<Note> = Vec::new();
 
     note::collect(&config.inbox_dir()?, false, &mut notes)?;
     note::collect(&config.next_dir()?, false, &mut notes)?;
+    note::collect(&config.someday_dir()?, true, &mut notes)?;
     note::collect(&config.project_dir()?, true, &mut notes)?;
 
     notes.retain(|note| note.is_active_todo());
@@ -375,4 +378,57 @@ fn update_frontmatter(content: &str, completed_date: &str) -> Result<String> {
     }
 
     Ok(new_lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_note(dir: &Path, name: &str, status: &str) {
+        fs::create_dir_all(dir).unwrap();
+        let content = format!("---\ntitle: {name}\nstatus: {status}\n---\n\n# {name}\n");
+        fs::write(dir.join(format!("{name}.md")), content).unwrap();
+    }
+
+    fn config_rooted_at(root: &Path) -> Config {
+        let mut config = Config::default();
+        config.general.root_dir = root.display().to_string();
+        config
+    }
+
+    #[test]
+    fn collects_someday_notes_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_rooted_at(tmp.path());
+        let someday = config.someday_dir().unwrap();
+
+        write_note(&someday, "top-level", "someday");
+        write_note(&someday.join("00502_買いたいもの"), "nested", "someday");
+        write_note(&config.next_dir().unwrap(), "next-action", "next");
+
+        let mut titles: Vec<String> = collect_todos(&config)
+            .unwrap()
+            .into_iter()
+            .map(|note| note.title)
+            .collect();
+        titles.sort();
+
+        assert_eq!(titles, vec!["nested", "next-action", "top-level"]);
+    }
+
+    #[test]
+    fn statusless_someday_notes_are_left_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = config_rooted_at(tmp.path());
+        let wishes = config.someday_dir().unwrap().join("00502_買いたいもの");
+
+        // Files migrated from another system carry an empty `status:`.
+        write_note(&wishes, "migrated-wish", "");
+        write_note(&wishes, "real-someday", "someday");
+
+        let todos = collect_todos(&config).unwrap();
+
+        assert_eq!(todos.len(), 1);
+        assert_eq!(todos[0].title, "real-someday");
+    }
 }
