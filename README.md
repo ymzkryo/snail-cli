@@ -133,7 +133,8 @@ snail todo new "Task" -n
 # Reject an unsafe title instead of sanitizing it
 snail todo new "出張メモ（8/27-29）" --strict
 
-# List all active todos (interactive selection to open in editor)
+# List all active todos (interactive selection to open in editor).
+# Scans 00000_INBOX, 00100_NEXTACTION, 00500_いつかやる (recursive) and 00800_プロジェクト (recursive).
 snail todo list
 
 # List todos with filters
